@@ -1,0 +1,21 @@
+stages:
+  - build
+
+variables:
+  IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+  DOCKER_FILE: docker/Dockerfile
+
+Build:
+  stage: build
+  image: docker:23.0.6
+  services:
+      - name: registry.hub.docker.com/library/docker:23.0.6-dind
+        alias: docker
+  before_script:
+    - |
+      docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY || true
+  script:
+    - |
+      docker build \
+        -t $IMAGE -f $DOCKER_FILE .
+      docker push $IMAGE
