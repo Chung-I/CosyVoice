@@ -17,6 +17,16 @@ authors = [
   cython = "^3.0.12"
   wetextprocessing = "1.0.4.1"
   omegaconf = "2.3.0"
+  conformer = "0.3.2"
+  diffusers = "0.29.0"
+  hydra-core = "1.3.2"
+  lightning = "2.2.4"
+  gdown = "5.1.0"
+  deepspeed = "0.14.2"
+  matplotlib = "^3.10.1"
+  wget = "^3.2"
+  pyarrow = "^19.0.1"
+  pyworld = "^0.3.5"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

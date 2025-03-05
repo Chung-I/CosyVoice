@@ -27,7 +27,9 @@ sys.path.append('{}/../../..'.format(ROOT_DIR))
 sys.path.append('{}/../../../third_party/Matcha-TTS'.format(ROOT_DIR))
 from cosyvoice.cli.cosyvoice import CosyVoice2
 from cosyvoice.utils.file_utils import load_wav
+from transformers.models.qwen2 import Qwen2ForCausalLM
 
+import anyio
 import uvloop
 from vllm.entrypoints.launcher import serve_http
 from vllm.utils import (
@@ -50,8 +52,8 @@ TIMEOUT_KEEP_ALIVE = 5  # seconds
 logger = logging.getLogger("uvicorn")
 
 
-def generate_data(model_output):
-    for i in model_output:
+async def generate_data(model_output):
+    async for i in model_output:
         tts_audio = (i['tts_speech'].numpy() * (2 ** 15)).astype(np.int16).tobytes()
         yield tts_audio
 
@@ -67,7 +69,7 @@ def add_endpoints(app):
     @app.post("/inference_zero_shot")
     async def inference_zero_shot(tts_text: str = Form(), prompt_text: str = Form(), prompt_wav: UploadFile = File()):
         prompt_speech_16k = load_wav(prompt_wav.file, 16000)
-        model_output = app.state.model.inference_zero_shot(tts_text, prompt_text, prompt_speech_16k)
+        model_output = app.state.model.inference_zero_shot(tts_text, prompt_text, prompt_speech_16k, text_frontend=False)
         return StreamingResponse(generate_data(model_output))
 
 
@@ -157,25 +159,89 @@ async def run_server(args, **uvicorn_kwargs) -> None:
     sock.close()
 
 
+async def run_server_hf(args, **uvicorn_kwargs) -> None:
+    global app
+    logger.info("vLLM API server version %s", VLLM_VERSION)
+    logger.info("args: %s", args)
+
+    nn_pool_size = int(os.environ.get("NN_POOL_SIZE", 100))
+
+    # workaround to make sure that we bind the port before the engine is set up.
+    # This avoids race conditions with ray.
+    # see https://github.com/vllm-project/vllm/issues/8204
+    sock_addr = (args.host or "", args.port)
+    sock = create_server_socket(sock_addr)
+
+    # workaround to avoid footguns where uvicorn drops requests with too
+    # many concurrent requests active
+    set_ulimit()
+
+    def signal_handler(*_) -> None:
+        # Interrupt server on sigterm while initializing
+        raise KeyboardInterrupt("terminated")
+
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    app = FastAPI()
+
+    add_endpoints(app)
+
+    llm_model = Qwen2ForCausalLM.from_pretrained(args.model)
+
+    app.state.model = CosyVoice2(llm_model, args.model_dir)
+
+    # model_config = await engine_client.get_model_config()
+    # await init_app_state(engine_client, model_config, app.state, args)
+
+    def _listen_addr(a: str) -> str:
+        if is_valid_ipv6_address(a):
+            return '[' + a + ']'
+        return a or "0.0.0.0"
+
+    logger.info("Starting vLLM API server on http://%s:%d",
+                _listen_addr(sock_addr[0]), sock_addr[1])
+
+    shutdown_task = await serve_http(
+        app,
+        sock=sock,
+        host=args.host,
+        port=args.port,
+        log_level=args.uvicorn_log_level,
+        timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
+        ssl_keyfile=args.ssl_keyfile,
+        ssl_certfile=args.ssl_certfile,
+        ssl_ca_certs=args.ssl_ca_certs,
+        ssl_cert_reqs=args.ssl_cert_reqs,
+        **uvicorn_kwargs,
+    )
+
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    limiter.total_tokens = nn_pool_size
+
+    # NB: Await server shutdown only after the backend context is exited
+    await shutdown_task
+
+    sock.close()
+
+
 if __name__ == '__main__':
     parser = FlexibleArgumentParser(
         description="vLLM OpenAI-Compatible RESTful API server.")
     parser = make_arg_parser(parser)
     parser.add_argument("--model-dir", type=str, help="CosyVoice2 model dir")
 
-    cosyvoice_model_path = os.environ["MODEL_DIR"]
+    cosyvoice_model_path = os.environ["COSYVOICE_MODEL_DIR"]
     vllm_model_path = os.environ["VLLM_MODEL_PATH"]
     args = parser.parse_args(
         ["--model",
         vllm_model_path,
-        "--served-model-name",
-        "whisper-large-v2",
         "--max-num-seqs",
         "400",
         "--model-dir",
         cosyvoice_model_path,
         "--port",
         "8000",
+        "--enforce-eager",
         ]
     )
     validate_parsed_serve_args(args)

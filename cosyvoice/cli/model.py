@@ -85,6 +85,7 @@ class CosyVoice2Model:
                                          finalize=finalize)
         tts_mel = tts_mel[:, :, token_offset * self.flow.token_mel_ratio:]
         hift_cache_source = torch.zeros(1, 1, 0)
+        # keep overlap mel and hift cache
         if speed != 1.0:
             tts_mel = F.interpolate(tts_mel, size=int(tts_mel.shape[2] / speed), mode='linear')
         tts_speech, tts_source = self.hift.inference(speech_feat=tts_mel, cache_source=hift_cache_source)

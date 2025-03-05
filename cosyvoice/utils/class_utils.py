@@ -35,7 +35,7 @@ from cosyvoice.transformer.subsampling import LegacyLinearNoSubsampling
 from cosyvoice.llm.llm import TransformerLM, Qwen2LM
 from cosyvoice.flow.flow import MaskedDiffWithXvec, CausalMaskedDiffWithXvec
 from cosyvoice.hifigan.generator import HiFTGenerator
-from cosyvoice.cli.model import CosyVoiceModel, CosyVoice2Model
+from cosyvoice.cli.model import CosyVoice2Model
 
 
 COSYVOICE_ACTIVATION_CLASSES = {
@@ -76,8 +76,6 @@ COSYVOICE_ATTENTION_CLASSES = {
 
 def get_model_type(configs):
     # NOTE CosyVoice2Model inherits CosyVoiceModel
-    if isinstance(configs['llm'], TransformerLM) and isinstance(configs['flow'], MaskedDiffWithXvec) and isinstance(configs['hift'], HiFTGenerator):
-        return CosyVoiceModel
     if isinstance(configs['llm'], Qwen2LM) and isinstance(configs['flow'], CausalMaskedDiffWithXvec) and isinstance(configs['hift'], HiFTGenerator):
         return CosyVoice2Model
     raise TypeError('No valid model type found!')
