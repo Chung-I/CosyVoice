@@ -54,7 +54,7 @@ async def inference_sft(tts_text: str = Form(), spk_id: str = Form()):
 @app.post("/inference_zero_shot")
 async def inference_zero_shot(tts_text: str = Form(), prompt_text: str = Form(), prompt_wav: UploadFile = File()):
     prompt_speech_16k = load_wav(prompt_wav.file, 16000)
-    model_output = cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_speech_16k)
+    model_output = cosyvoice.inference_zero_shot(tts_text, prompt_text, prompt_speech_16k, text_frontend=False)
     return StreamingResponse(generate_data(model_output))
 
 
@@ -90,12 +90,20 @@ if __name__ == '__main__':
                         type=str,
                         default='iic/CosyVoice-300M',
                         help='local path or modelscope repo id')
+    parser.add_argument('--tokenizer_model_dir',
+                        type=str,
+                        default='iic/CosyVoice-300M',
+                        help='local path or modelscope repo id')
+    parser.add_argument('--vllm_endpoint',
+                        type=str,
+                        default='iic/CosyVoice-300M',
+                        help='local path or modelscope repo id')
     args = parser.parse_args()
     try:
         cosyvoice = CosyVoice(args.model_dir)
     except Exception:
         try:
-            cosyvoice = CosyVoice2(args.model_dir)
+            cosyvoice = CosyVoice2(args.vllm_endpoint, args.tokenizer_model_dir, args.model_dir)
         except Exception:
             raise TypeError('no valid model_type!')
     uvicorn.run(app, host="0.0.0.0", port=args.port)

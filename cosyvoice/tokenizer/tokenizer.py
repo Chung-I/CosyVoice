@@ -257,7 +257,7 @@ class QwenTokenizer():
         }
         self.special_tokens = special_tokens
         self.tokenizer = AutoTokenizer.from_pretrained(token_path)
-        self.tokenizer.add_special_tokens(special_tokens)
+        # self.tokenizer.add_special_tokens(special_tokens)
         self.skip_special_tokens = skip_special_tokens
 
     def encode(self, text, **kwargs):

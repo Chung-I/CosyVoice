@@ -76,8 +76,9 @@ COSYVOICE_ATTENTION_CLASSES = {
 
 def get_model_type(configs):
     # NOTE CosyVoice2Model inherits CosyVoiceModel
-    if isinstance(configs['llm'], TransformerLM) and isinstance(configs['flow'], MaskedDiffWithXvec) and isinstance(configs['hift'], HiFTGenerator):
+    # if isinstance(configs['llm'], TransformerLM) and isinstance(configs['flow'], MaskedDiffWithXvec) and isinstance(configs['hift'], HiFTGenerator):
+    if isinstance(configs['flow'], MaskedDiffWithXvec) and isinstance(configs['hift'], HiFTGenerator):
         return CosyVoiceModel
-    if isinstance(configs['llm'], Qwen2LM) and isinstance(configs['flow'], CausalMaskedDiffWithXvec) and isinstance(configs['hift'], HiFTGenerator):
+    if isinstance(configs['flow'], CausalMaskedDiffWithXvec) and isinstance(configs['hift'], HiFTGenerator):
         return CosyVoice2Model
     raise TypeError('No valid model type found!')

@@ -20,6 +20,8 @@ import time
 from torch.nn import functional as F
 from contextlib import nullcontext
 import uuid
+import requests
+import re
 from cosyvoice.utils.common import fade_in_out
 from cosyvoice.utils.file_utils import convert_onnx_to_trt
 
@@ -27,7 +29,7 @@ from cosyvoice.utils.file_utils import convert_onnx_to_trt
 class CosyVoiceModel:
 
     def __init__(self,
-                 llm: torch.nn.Module,
+                 llm: str,
                  flow: torch.nn.Module,
                  hift: torch.nn.Module,
                  fp16: bool):
@@ -36,10 +38,8 @@ class CosyVoiceModel:
         self.flow = flow
         self.hift = hift
         self.fp16 = fp16
-        self.llm.fp16 = fp16
         self.flow.fp16 = fp16
         if self.fp16 is True:
-            self.llm.half()
             self.flow.half()
         self.token_min_hop_len = 2 * self.flow.input_frame_rate
         self.token_max_hop_len = 4 * self.flow.input_frame_rate
@@ -66,9 +66,7 @@ class CosyVoiceModel:
         self.flow_cache_dict = {}
         self.hift_cache_dict = {}
 
-    def load(self, llm_model, flow_model, hift_model):
-        self.llm.load_state_dict(torch.load(llm_model, map_location=self.device), strict=True)
-        self.llm.to(self.device).eval()
+    def load(self, flow_model, hift_model):
         self.flow.load_state_dict(torch.load(flow_model, map_location=self.device), strict=True)
         self.flow.to(self.device).eval()
         # in case hift_model is a hifigan model
@@ -76,11 +74,7 @@ class CosyVoiceModel:
         self.hift.load_state_dict(hift_state_dict, strict=True)
         self.hift.to(self.device).eval()
 
-    def load_jit(self, llm_text_encoder_model, llm_llm_model, flow_encoder_model):
-        llm_text_encoder = torch.jit.load(llm_text_encoder_model, map_location=self.device)
-        self.llm.text_encoder = llm_text_encoder
-        llm_llm = torch.jit.load(llm_llm_model, map_location=self.device)
-        self.llm.llm = llm_llm
+    def load_jit(self, flow_encoder_model):
         flow_encoder = torch.jit.load(flow_encoder_model, map_location=self.device)
         self.flow.encoder = flow_encoder
 
@@ -101,23 +95,49 @@ class CosyVoiceModel:
     def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
         with self.llm_context:
             if isinstance(text, Generator):
-                assert isinstance(self, CosyVoice2Model), 'streaming input text is only implemented for CosyVoice2!'
-                for i in self.llm.inference_bistream(text=text,
-                                                     prompt_text=prompt_text.to(self.device),
-                                                     prompt_text_len=torch.tensor([prompt_text.shape[1]], dtype=torch.int32).to(self.device),
-                                                     prompt_speech_token=llm_prompt_speech_token.to(self.device),
-                                                     prompt_speech_token_len=torch.tensor([llm_prompt_speech_token.shape[1]], dtype=torch.int32).to(self.device),
-                                                     embedding=llm_embedding.to(self.device)):
-                    self.tts_speech_token_dict[uuid].append(i)
-            else:
-                for i in self.llm.inference(text=text.to(self.device),
-                                            text_len=torch.tensor([text.shape[1]], dtype=torch.int32).to(self.device),
-                                            prompt_text=prompt_text.to(self.device),
-                                            prompt_text_len=torch.tensor([prompt_text.shape[1]], dtype=torch.int32).to(self.device),
-                                            prompt_speech_token=llm_prompt_speech_token.to(self.device),
-                                            prompt_speech_token_len=torch.tensor([llm_prompt_speech_token.shape[1]], dtype=torch.int32).to(self.device),
-                                            embedding=llm_embedding.to(self.device)):
-                    self.tts_speech_token_dict[uuid].append(i)
+                raise NotImplementedError
+            list_text = text.cpu().numpy().tolist()[0]
+            list_prompt_text = prompt_text.cpu().numpy().tolist()[0]
+            list_speech_token = llm_prompt_speech_token.cpu().numpy().tolist()[0]
+            llm_prompt = [151936] + list_prompt_text + list_text + [151937] + [s + 151938 for s in list_speech_token]
+            payload = {
+                "model": "cosyvoice2",
+                "prompt": llm_prompt,
+                "n": 1,
+                "repetition_penalty": 1.4,
+                "use_beam_search": False,
+                "temperature": 1.0,
+                "top_p": 0.8,
+                "top_k": 5,
+                "max_tokens": 750,
+                "stream": False,
+                "stop_token_ids": [158499, 158501],
+                # "stop_token_ids": [self.speech_output_sos_eos, self.speech_output_fill_token],
+            }
+            response = requests.post(self.llm, json=payload)
+            result = response.json()
+            llm_token_text = result["choices"][0]["text"]
+            llm_token_list = [int(token.group(1)) for token in re.finditer(r"<\|s_([0-9]+)\|>", llm_token_text)]
+            print(llm_token_text, llm_token_list)
+            self.tts_speech_token_dict[uuid].extend(llm_token_list)
+            # if isinstance(text, Generator):
+            #     assert isinstance(self, CosyVoice2Model), 'streaming input text is only implemented for CosyVoice2!'
+            #     for i in self.llm.inference_bistream(text=text,
+            #                                          prompt_text=prompt_text.to(self.device),
+            #                                          prompt_text_len=torch.tensor([prompt_text.shape[1]], dtype=torch.int32).to(self.device),
+            #                                          prompt_speech_token=llm_prompt_speech_token.to(self.device),
+            #                                          prompt_speech_token_len=torch.tensor([llm_prompt_speech_token.shape[1]], dtype=torch.int32).to(self.device),
+            #                                          embedding=llm_embedding.to(self.device)):
+            #         self.tts_speech_token_dict[uuid].append(i)
+            # else:
+            #     for i in self.llm.inference(text=text.to(self.device),
+            #                                 text_len=torch.tensor([text.shape[1]], dtype=torch.int32).to(self.device),
+            #                                 prompt_text=prompt_text.to(self.device),
+            #                                 prompt_text_len=torch.tensor([prompt_text.shape[1]], dtype=torch.int32).to(self.device),
+            #                                 prompt_speech_token=llm_prompt_speech_token.to(self.device),
+            #                                 prompt_speech_token_len=torch.tensor([llm_prompt_speech_token.shape[1]], dtype=torch.int32).to(self.device),
+            #                                 embedding=llm_embedding.to(self.device)):
+            #         self.tts_speech_token_dict[uuid].append(i)
         self.llm_end_dict[uuid] = True
 
     def token2wav(self, token, prompt_token, prompt_feat, embedding, uuid, finalize=False, speed=1.0):
@@ -282,7 +302,7 @@ class CosyVoiceModel:
 class CosyVoice2Model(CosyVoiceModel):
 
     def __init__(self,
-                 llm: torch.nn.Module,
+                 llm: str,
                  flow: torch.nn.Module,
                  hift: torch.nn.Module,
                  fp16: bool):
@@ -291,10 +311,8 @@ class CosyVoice2Model(CosyVoiceModel):
         self.flow = flow
         self.hift = hift
         self.fp16 = fp16
-        self.llm.fp16 = fp16
         self.flow.fp16 = fp16
         if self.fp16 is True:
-            self.llm.half()
             self.flow.half()
         self.token_hop_len = 2 * self.flow.input_frame_rate
         # here we fix flow encoder/decoder decoding_chunk_size, in the future we will send it as arguments, or use cache
