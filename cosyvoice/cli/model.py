@@ -92,7 +92,7 @@ class CosyVoiceModel:
             raise ValueError('failed to load trt {}'.format(flow_decoder_estimator_model))
         self.flow.decoder.estimator = self.flow.decoder.estimator_engine.create_execution_context()
 
-    def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, uuid):
+    def llm_job(self, text, prompt_text, llm_prompt_speech_token, llm_embedding, llm_request, uuid):
         with self.llm_context:
             if isinstance(text, Generator):
                 raise NotImplementedError
@@ -100,21 +100,10 @@ class CosyVoiceModel:
             list_prompt_text = prompt_text.cpu().numpy().tolist()[0]
             list_speech_token = llm_prompt_speech_token.cpu().numpy().tolist()[0]
             llm_prompt = [151936] + list_prompt_text + list_text + [151937] + [s + 151938 for s in list_speech_token]
-            payload = {
-                "model": "cosyvoice2",
-                "prompt": llm_prompt,
-                "n": 1,
-                "repetition_penalty": 1.4,
-                "use_beam_search": False,
-                "temperature": 1.0,
-                "top_p": 0.8,
-                "top_k": 5,
-                "max_tokens": 750,
-                "stream": False,
-                "stop_token_ids": [158499, 158501],
-                # "stop_token_ids": [self.speech_output_sos_eos, self.speech_output_fill_token],
-            }
-            response = requests.post(self.llm, json=payload)
+            llm_request["prompt"] = llm_prompt
+            llm_request["stop_token_ids"] = [158499, 158501]
+
+            response = requests.post(self.llm, json=llm_request)
             result = response.json()
             llm_token_text = result["choices"][0]["text"]
             llm_token_list = [int(token.group(1)) for token in re.finditer(r"<\|s_([0-9]+)\|>", llm_token_text)]
@@ -184,7 +173,8 @@ class CosyVoiceModel:
             prompt_text=torch.zeros(1, 0, dtype=torch.int32),
             llm_prompt_speech_token=torch.zeros(1, 0, dtype=torch.int32),
             flow_prompt_speech_token=torch.zeros(1, 0, dtype=torch.int32),
-            prompt_speech_feat=torch.zeros(1, 0, 80), stream=False, speed=1.0, **kwargs):
+            prompt_speech_feat=torch.zeros(1, 0, 80), llm_request=dict(),
+            stream=False, speed=1.0, **kwargs):
         # this_uuid is used to track variables related to this inference thread
         this_uuid = str(uuid.uuid1())
         with self.lock:
@@ -192,7 +182,7 @@ class CosyVoiceModel:
             self.hift_cache_dict[this_uuid] = None
             self.mel_overlap_dict[this_uuid] = torch.zeros(1, 80, 0)
             self.flow_cache_dict[this_uuid] = torch.zeros(1, 80, 0, 2)
-        p = threading.Thread(target=self.llm_job, args=(text, prompt_text, llm_prompt_speech_token, llm_embedding, this_uuid))
+        p = threading.Thread(target=self.llm_job, args=(text, prompt_text, llm_prompt_speech_token, llm_embedding, llm_request, this_uuid))
         p.start()
         if stream is True:
             token_hop_len = self.token_min_hop_len
@@ -374,13 +364,14 @@ class CosyVoice2Model(CosyVoiceModel):
             prompt_text=torch.zeros(1, 0, dtype=torch.int32),
             llm_prompt_speech_token=torch.zeros(1, 0, dtype=torch.int32),
             flow_prompt_speech_token=torch.zeros(1, 0, dtype=torch.int32),
-            prompt_speech_feat=torch.zeros(1, 0, 80), stream=False, speed=1.0, **kwargs):
+            prompt_speech_feat=torch.zeros(1, 0, 80), llm_request=dict(),
+            stream=False, speed=1.0, **kwargs):
         # this_uuid is used to track variables related to this inference thread
         this_uuid = str(uuid.uuid1())
         with self.lock:
             self.tts_speech_token_dict[this_uuid], self.llm_end_dict[this_uuid] = [], False
             self.hift_cache_dict[this_uuid] = None
-        p = threading.Thread(target=self.llm_job, args=(text, prompt_text, llm_prompt_speech_token, llm_embedding, this_uuid))
+        p = threading.Thread(target=self.llm_job, args=(text, prompt_text, llm_prompt_speech_token, llm_embedding, llm_request, this_uuid))
         p.start()
         if stream is True:
             token_offset = 0
